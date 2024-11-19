@@ -8,6 +8,11 @@ Repo contains some implementations of RAG systems for a dedicated dataset provid
 
 You can find raw dataset in RTF (Rich Text Format) in  ```dataset/raw/*.rtf```.
 
+
+## Evaluation techniques
+
+TODO
+
 ### GraphRAG
 
 TODO
