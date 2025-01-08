@@ -96,36 +96,47 @@ def fusion_retrieval_block(db, query, alpha=0.9, top_k=10):
 
 
 
-def llm_ranker(query, answers, model):
-
-    MODEL_INSTRUCTION = 'Ты юрист в банковской сфере. Отвечай на вопросы на основе Положения Банка России \
+class LLM_Ranker:
+    def __init__(self, model):
+        self.model = model
+        self.instruction = 'Ты юрист в банковской сфере. Отвечай на вопросы на основе Положения Банка России \
 "О требованиях к системе управления операционным риском в кредитной организации \
 и банковской группе."'
-
-    template = """Ответ должен содержать ровно одно число. Оцени по шкале от 1 до 10, насколько хорошо данный ответ отвечает на заданный вопрос.\
+        self.template = """Ответ должен содержать ровно одно число. Оцени по шкале от 1 до 100, насколько хорошо данный ответ отвечает на заданный вопрос.\
 Вопрос: {query}\
 Ответ: {answer}"""
-    prompt = PromptTemplate(template=template, input_variables=['query', 'answer'])
-    scores = []
-    for answer in answers:
-        PROMPT = prompt.format(query=query, answer=answer.page_content)
 
-        messages = [
-            SystemMessage(
-                content=MODEL_INSTRUCTION
-            ),
-            HumanMessage(content=PROMPT)
-        ]
-        scores.append(float(model(messages)))
+
+    def __call__(self, query, answers):
+
+        prompt = PromptTemplate(template=self.template, input_variables=['query', 'answer'])
+        scores = []
+        for answer in answers:
+            PROMPT = prompt.format(query=query, answer=answer.page_content)
+
+            messages = [
+                SystemMessage(
+                    content=self.instruction
+                ),
+                HumanMessage(content=PROMPT)
+            ]
+            model_answer = self.model(messages).content
+            try:
+                scores.append(float(model_answer) / 100)
+            except:
+                scores.append(0)
 
         return scores
 
-def cross_encoder_ranker(query, answers, reranker_model):
-    answers = [answer.page_content for answer in answers]
-    rank_result = reranker_model.rank(query, answers)
-    vals = [res['score'] for res in rank_result]
-    return vals
+class CE_ranker:
+    def __init__(self, reranker_model):
+        self.reranker_model = reranker_model
 
+    def __call__(self, query, answers):
+        answers = [answer.page_content for answer in answers]
+        rank_result = self.reranker_model.rank(query, answers)
+        vals = [res['score'] for res in rank_result]
+        return vals
 
 def chat(model, prompt):
     MODEL_INSTRUCTION = 'Ты юрист в банковской сфере. Отвечай на вопросы на основе Положения Банка России \
@@ -144,12 +155,13 @@ def chat(model, prompt):
 
 
 class Retriever:
-    def __init__(self, db, reranker=None, strategy='mmr', fusion_alpha=1, k = 10, has_answer_th = 0.):
+    def __init__(self, db, reranker=None, strategy='mmr', fusion_alpha=1, k = 10, rerank_k = None, has_answer_th = 0.):
         self.database = db
         self.reranker = reranker
         self.strategy = strategy
         self.fusion_alpha = fusion_alpha
         self.k = k
+        self.rerank_k = k if rerank_k is None else rerank_k
         self.has_answer_th = has_answer_th
 
     def rerank_docs(self, query, docs):
@@ -164,12 +176,14 @@ class Retriever:
             scores = self.rerank_docs(query, docs)
 
         else:
-            docs, fusion_scores = fusion_retrieval_block(self.database, query, self.fusion_alpha, self.k)
+            docs, fusion_scores = fusion_retrieval_block(self.database, query, self.fusion_alpha, self.rerank_k)
             reranker_scores = self.rerank_docs(query, docs)
             scores = reranker_scores + fusion_scores
+        
 
         score_doc = list(zip(scores, docs))
-        score_doc.sort(key=lambda x: x[0])
+        score_doc = sorted(score_doc, key=lambda x: x[0], reverse = True)
+        score_doc = score_doc[:self.k]
         if score_doc[0][0] < self.has_answer_th:
             return None
         return [elem[1] for elem in score_doc]
